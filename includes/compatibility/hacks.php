@@ -110,3 +110,93 @@ function woocommerce_product_custom_tables_join_product_to_post( $args ) {
 }
 
 add_filter( 'posts_clauses', 'woocommerce_product_custom_tables_join_product_to_post' );
+
+
+
+
+/**
+ * Where meta_value is used to order query, order by meta value if set, otherwise by product table column
+ *
+ * @param array $args
+ * @param WP_Query $context
+ * @return void
+ */
+function woocommerce_product_custom_tables_order_by_case( $args, $context ) {
+	global $wpdb;
+
+	if (is_product_meta_query($context)) {
+		$meta_key = $context->query['meta_key'];
+		$args['orderby'] = '
+			CASE
+				WHEN ' . $wpdb->prefix . 'postmeta.meta_key = "' . $meta_key . '" THEN ' . $wpdb->prefix . 'postmeta.meta_value+0
+				WHEN ' . $wpdb->prefix . 'postmeta.meta_key != "' . $meta_key . '" THEN wc_products.total_sales
+			END
+		' . strtoupper($context->query['order']);
+	}
+
+	return $args;
+}
+
+add_filter( 'posts_clauses', 'woocommerce_product_custom_tables_order_by_case', 10, 2 );
+
+/**
+ * Conditionally set meta_key query variable if product table column does not exist.
+ * Used in conjunction with both posts_clauses filters
+ *
+ * @param array $sql
+ * @param array $queries
+ * @param string $type
+ * @param string $primary_table
+ * @param string $primary_id_column
+ * @param object $context
+ * @return array
+ */
+function woocommerce_product_custom_tables_conditional_meta_key( $sql, $queries, $type, $primary_table, $primary_id_column, $context ) {
+	global $wpdb;
+
+	if (is_product_meta_query($context)) {
+		$meta_key = $context->query['meta_key'];
+		// Trim meta key for _price meta -> price column compatibility.
+		$column_key = ltrim($meta_key, '_');
+		$sql['where'] = '
+			AND (
+				IF(
+					NOT EXISTS (
+						SELECT *
+						FROM information_schema.COLUMNS
+						WHERE
+							TABLE_SCHEMA = "' . $wpdb->dbname . '"
+							AND TABLE_NAME = "' . $wpdb->prefix . 'wc_products"
+							AND COLUMN_NAME = "' . $column_key . '"
+					),
+					wp_postmeta.meta_key,
+					"' . $meta_key . '"
+				) = "' . $meta_key . '"
+			)
+		';
+	}
+
+	return $sql;
+}
+
+add_filter( 'get_meta_sql', 'woocommerce_product_custom_tables_conditional_meta_key', 10, 6 );
+
+/**
+ * Check if $context is WP_Query targets products and uses meta_value / meta_value_num for order
+ *
+ * @param object|WP_Query $context
+ * @return boolean
+ */
+function is_product_meta_query($context){
+	if ($context instanceof \WP_Query) {
+		if (array_key_exists('post_type', $context->query)) {
+			if ($context->query['post_type'] === 'product') {
+				if (isset($context->query['meta_key']) && empty($context->query['meta_query'])) {
+					return true;
+				}
+			}
+		}
+	}
+
+	return false;
+}
